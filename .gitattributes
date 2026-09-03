@@ -1,0 +1,16 @@
+# Переводы строк нормализуются в репозитории (LF), в рабочем каталоге —
+# как принято в системе. Проект собирается и на Windows, и на Linux.
+* text=auto
+
+*.py     text diff=python
+*.md     text
+*.json   text
+*.spec   text diff=python
+*.ps1    text eol=crlf
+*.bat    text eol=crlf
+*.sh     text eol=lf
+
+*.png    binary
+*.jpg    binary
+*.ico    binary
+*.exe    binary

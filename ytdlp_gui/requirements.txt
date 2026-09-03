@@ -1,0 +1,13 @@
+# Графический интерфейс
+customtkinter>=5.2.2
+# Превью (обложки видео): декодирование JPEG/WEBP
+pillow>=10.0
+
+# На Linux дополнительно может потребоваться системный пакет:
+#   sudo apt install python3-tk
+# yt-dlp.exe уже находится в этой папке (yt-dlp/yt-dlp.exe).
+# Для слияния видео+аудио, извлечения аудио, встраивания субтитров и
+# обложек дополнительно нужен FFmpeg — укажите путь на вкладке «Настройки»:
+#   Windows:  https://ffmpeg.org/download.html
+#   Linux:    sudo apt install ffmpeg
+#   macOS:    brew install ffmpeg
