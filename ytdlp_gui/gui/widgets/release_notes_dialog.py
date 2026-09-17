@@ -1,12 +1,12 @@
 """Окно «что нового»: релизы yt-dlp до того, как что-то скачано.
 
-Повторяет ``views/dialogs/release_notes_dialog.py`` из ZapretGUI: новая
-версия приходит тегом и стеной Markdown, а окно оставляет от неё те три
-вещи, по которым принимают решение, — какая версия, когда вышла и что в
-ней изменилось. По карточке на релиз, новые сверху.
+Новая версия приходит тегом и стеной Markdown, а окно оставляет от неё
+то, по чему принимают решение: какая версия, когда вышла и что в ней
+изменилось. Релизы идут сверху вниз, новые первыми.
 
-Кнопка «Скачать» не открывает браузер: загрузка и установка идут здесь
-же, прогресс показывается на месте кнопок.
+Устроено как окно библиотек «Стемницы» (design-system §8.1): подвал с
+версиями слева, «Закрыть» и основная кнопка справа, а над подвалом —
+блок хода загрузки с янтарной полосой 4 px.
 """
 
 from __future__ import annotations
@@ -16,60 +16,33 @@ from collections.abc import Callable, Sequence
 import customtkinter as ctk
 
 from ...core.updates import NoteSection, ReleaseInfo
-from .. import theme
-from .design import Card, button, link_button, muted_label, primary_button, separator, title_label
+from .. import fmt, theme
+from .design import Btn, Column, Para, ProgressBar, box, hline, sec_label, text
+from .dialogs import Dialog
+from .layout import autohide_scrollbar
 
-BADGE_SIZE = 44
-DIALOG_SIZE = (720, 720)
+DIALOG_SIZE = (680, 700)
 
 
 class ReleaseCard(ctk.CTkFrame):
-    """Один релиз: значок, версия, дата и разделы описания под ними."""
+    """Один релиз: версия, дата и разделы описания под ними."""
 
     def __init__(self, master, release: ReleaseInfo, *, empty_text: str = "") -> None:
-        super().__init__(master, fg_color="transparent")
-        self.release = release
+        super().__init__(master, fg_color="transparent", width=0, height=0)
         self.grid_columnconfigure(0, weight=1)
 
-        header = Card(self)
-        header.configure(fg_color=theme.color("bg.elevated"))
-        header.grid(row=0, column=0, sticky="ew")
-        body = header.body
-        # Card растягивает свою единственную колонку; здесь колонок две, и
-        # тянуться должна правая — иначе значок уезжает в центр карточки.
-        body.grid_columnconfigure(0, weight=0)
-        body.grid_columnconfigure(1, weight=1)
-
-        badge = ctk.CTkFrame(
-            body,
-            width=BADGE_SIZE,
-            height=BADGE_SIZE,
-            corner_radius=BADGE_SIZE // 2,
-            fg_color=theme.mix("accent", "bg.elevated", 0.18),
+        head = box(self)
+        head.grid(row=0, column=0, sticky="ew")
+        head.grid_columnconfigure(1, weight=1)
+        text(head, release.version_text, font=theme.sans_medium(17)).grid(row=0, column=0, sticky="w")
+        details = fmt.join(
+            release.date_text,
+            "предварительная" if release.prerelease else "",
+            f"файл {fmt.size(release.asset_size)}" if release.asset_size else "",
         )
-        badge.grid(row=0, column=0, rowspan=2, padx=(0, theme.GAP["lg"]))
-        badge.grid_propagate(False)
-        ctk.CTkLabel(
-            badge,
-            text="!",
-            text_color=theme.color("accent"),
-            font=theme.font("title", weight="bold"),
-        ).place(relx=0.5, rely=0.5, anchor="center")
-
-        ctk.CTkLabel(
-            body,
-            text=release.version_text,
-            anchor="w",
-            font=theme.font("title", weight="bold"),
-        ).grid(row=0, column=1, sticky="ew")
-
-        ctk.CTkLabel(
-            body,
-            text=release.date_text,
-            anchor="w",
-            text_color=theme.color("accent"),
-            font=theme.font("small"),
-        ).grid(row=1, column=1, sticky="ew")
+        text(head, details, font=theme.mono(11), color=theme.FAINT).grid(
+            row=0, column=1, sticky="w", padx=(12, 0), pady=(3, 0)
+        )
 
         sections = release.sections()
         row = 1
@@ -78,47 +51,32 @@ class ReleaseCard(ctk.CTkFrame):
                 self._add_section(section, row)
                 row += 1
         elif empty_text:
-            muted_label(self, empty_text, wraplength=600).grid(
-                row=row, column=0, sticky="ew", pady=(theme.GAP["md"], 0)
+            Para(self, empty_text, font=theme.sans(13), color=theme.DIM).grid(
+                row=row, column=0, sticky="ew", pady=(12, 0)
             )
 
     def _add_section(self, section: NoteSection, row: int) -> None:
-        holder = ctk.CTkFrame(self, fg_color="transparent")
-        holder.grid(row=row, column=0, sticky="ew", padx=theme.GAP["xs"], pady=(theme.GAP["md"], 0))
-        holder.grid_columnconfigure(0, weight=1)
-
-        line = 0
+        holder = Column(self)
+        holder.grid(row=row, column=0, sticky="ew", pady=(16, 0))
         if section.title:
-            ctk.CTkLabel(
-                holder,
-                text=section.title,
-                anchor="w",
-                justify="left",
-                wraplength=620,
-                font=theme.font("base", weight="bold"),
-            ).grid(row=line, column=0, sticky="ew", pady=(0, theme.GAP["xs"]))
-            line += 1
-
+            holder.add(sec_label(holder, section.title), pady=(0, 8), sticky="w")
         for item in section.items:
-            # Вложенные пункты сдвигаем и приглушаем — иначе список
-            # второго уровня читается как продолжение первого.
-            label = ctk.CTkLabel(
-                holder,
-                text=f"•  {item.text}",
-                anchor="w",
-                justify="left",
-                wraplength=600 - item.level * 24,
-                text_color=theme.color("fg.secondary" if item.level else "fg.primary"),
-                font=theme.font("small" if item.level else "base"),
+            # Вложенные пункты сдвинуты и приглушены — иначе список второго
+            # уровня читается как продолжение первого.
+            holder.add(
+                Para(
+                    holder,
+                    f"·  {item.text}",
+                    font=theme.sans(12 if item.level else 13),
+                    color=theme.DIM if item.level else theme.TXT,
+                ),
+                padx=(item.level * 18, 0),
+                pady=(0, 4),
             )
-            label.grid(
-                row=line, column=0, sticky="ew", padx=(theme.GAP["sm"] + item.level * 24, 0), pady=1
-            )
-            line += 1
 
 
-class ReleaseNotesDialog(ctk.CTkToplevel):
-    """Само окно: релизы, кнопка загрузки и переход к полной истории."""
+class ReleaseNotesDialog(Dialog):
+    """Само окно: релизы, ход загрузки, кнопка установки и переход к истории."""
 
     def __init__(
         self,
@@ -128,75 +86,56 @@ class ReleaseNotesDialog(ctk.CTkToplevel):
         title: str = "Доступно обновление",
         subtitle: str = "",
         empty_text: str = "Описание изменений не опубликовано.",
-        download_text: str = "↓  Скачать",
-        history_text: str = "Просмотр истории изменений",
+        history_text: str = "История изменений",
         close_text: str = "Закрыть",
         on_download: Callable[[ReleaseInfo], None] | None = None,
         on_history: Callable[[], None] | None = None,
     ) -> None:
-        super().__init__(master)
-        self.title(title)
-        self.geometry(f"{DIALOG_SIZE[0]}x{DIALOG_SIZE[1]}")
-        self.minsize(520, 420)
-        self.configure(fg_color=theme.color("bg.window"))
-        self.transient(master.winfo_toplevel())
-
+        super().__init__(master, title, subtitle=subtitle, size=DIALOG_SIZE, min_size=(520, 440))
         self._on_download = on_download
         self._releases: tuple[ReleaseInfo, ...] = ()
         self._empty_text = empty_text
+        self._busy = False
 
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(2, weight=1)
-
-        self.heading = title_label(self, title)
-        self.heading.configure(font=theme.font("hero", weight="bold"), wraplength=640)
-        self.heading.grid(
-            row=0, column=0, sticky="ew", padx=theme.GAP["xl"], pady=(theme.GAP["xl"], 0)
+        self.body = ctk.CTkScrollableFrame(
+            self.content,
+            fg_color=theme.BG2,
+            corner_radius=0,
+            scrollbar_button_color=theme.LINE2,
+            scrollbar_button_hover_color=theme.DIM,
         )
-
-        self.subtitle = muted_label(self, subtitle, wraplength=640)
-        self.subtitle.grid(row=1, column=0, sticky="ew", padx=theme.GAP["xl"], pady=(4, theme.GAP["md"]))
-
-        self.body = ctk.CTkScrollableFrame(self, fg_color="transparent", corner_radius=0)
-        self.body.grid(row=2, column=0, sticky="nsew", padx=theme.GAP["xl"])
+        self.body.grid(row=0, column=0, sticky="nsew")
         self.body.grid_columnconfigure(0, weight=1)
+        autohide_scrollbar(self.body)
 
-        footer = ctk.CTkFrame(self, fg_color="transparent")
-        footer.grid(
-            row=3, column=0, sticky="ew", padx=theme.GAP["xl"], pady=(theme.GAP["md"], theme.GAP["lg"])
-        )
-        footer.grid_columnconfigure(0, weight=1)
+        # Блок хода загрузки — над подвалом, как в окне библиотек «Стемницы».
+        self.progress = box(self.content)
+        self.progress.grid_columnconfigure(0, weight=1)
+        self.progress_title = text(self.progress, "", font=theme.sans(13))
+        self.progress_title.grid(row=0, column=0, sticky="w")
+        self.progress_bar = ProgressBar(self.progress, height=4, color=theme.AMBER)
+        self.progress_bar.grid(row=1, column=0, sticky="ew", pady=(8, 8))
+        self.progress_detail = text(self.progress, "", font=theme.mono(11), color=theme.DIM)
+        self.progress_detail.grid(row=2, column=0, sticky="w")
 
-        self.progress_label = muted_label(footer, "")
-        self.progress_bar = ctk.CTkProgressBar(footer, height=8)
-        self.progress_bar.set(0)
-
-        self.download_button = primary_button(footer, download_text, self._download, height=42)
-        self.download_button.grid(row=2, column=0, sticky="ew")
-
-        self.history_button = button(footer, history_text, on_history, height=38)
+        self.set_info("github · yt-dlp/yt-dlp · sha-256")
+        footer = box(self.footer)
+        footer.grid(row=0, column=2, sticky="e")
+        self.history_button = Btn(footer, history_text, on_history, kind="quiet")
+        self.close_button = Btn(footer, close_text, self.destroy, kind="quiet")
+        self.close_button.grid(row=0, column=1, padx=(8, 0))
+        self.download_button = Btn(footer, "Скачать", self._download, kind="primary", size="md")
+        self.download_button.grid(row=0, column=2, padx=(12, 0))
         self.set_history_visible(on_history is not None)
 
-        self.close_button = link_button(footer, close_text, self.destroy)
-        self.close_button.grid(row=4, column=0, pady=(theme.GAP["sm"], 0))
-
-        self.bind("<Escape>", lambda _e: self.destroy())
-        self.after(120, self._raise)
         self.set_releases(releases)
 
     def set_history_visible(self, visible: bool) -> None:
-        """В окне истории кнопка «показать историю» не нужна — мы уже в ней."""
+        """В окне истории кнопка «история» не нужна — мы уже в ней."""
         if visible:
-            self.history_button.grid(row=3, column=0, sticky="ew", pady=(theme.GAP["sm"], 0))
+            self.history_button.grid(row=0, column=0)
         else:
             self.history_button.grid_remove()
-
-    def _raise(self) -> None:
-        try:
-            self.lift()
-            self.focus()
-        except Exception:  # noqa: BLE001 - окно могли закрыть до срабатывания after()
-            pass
 
     # -- содержимое ----------------------------------------------------------
     def set_releases(self, releases: Sequence[ReleaseInfo]) -> None:
@@ -208,58 +147,75 @@ class ReleaseNotesDialog(ctk.CTkToplevel):
         row = 0
         for index, release in enumerate(self._releases):
             if index:
-                separator(self.body).grid(
-                    row=row, column=0, sticky="ew", pady=theme.GAP["lg"]
-                )
+                hline(self.body).grid(row=row, column=0, sticky="ew", pady=20)
                 row += 1
             ReleaseCard(self.body, release, empty_text=self._empty_text).grid(
-                row=row, column=0, sticky="ew"
+                row=row, column=0, sticky="ew", padx=(0, 12)
             )
             row += 1
 
         if not self._releases:
-            muted_label(self.body, "Список релизов пуст.").grid(row=0, column=0, sticky="w")
+            text(self.body, "Список релизов пуст.", color=theme.DIM).grid(row=0, column=0, sticky="w")
 
-        installable = self._installable()
-        self.download_button.configure(state="normal" if installable else "disabled")
+        target = self._installable()
+        label = "Скачать"
+        if target is not None and target.asset_size:
+            label = f"Скачать · {fmt.size(target.asset_size)}"
+        if not self._busy:
+            self.download_button.configure(text=label)
+            self.download_button.set_enabled(target is not None)
 
     def _installable(self) -> ReleaseInfo | None:
         return next((release for release in self._releases if release.is_installable), None)
 
     # -- ход загрузки --------------------------------------------------------
+    def _show_progress(self) -> None:
+        if not self.progress.winfo_manager():
+            self.progress.grid(row=1, column=0, sticky="ew", pady=(18, 0))
+
     def show_progress(self, done: int, total: int) -> None:
-        self._show_progress_widgets()
+        self._show_progress()
+        target = self._installable()
+        name = target.asset_name if target is not None else "yt-dlp"
+        self.progress_title.configure(
+            text=fmt.join("Скачивание", name), text_color=theme.TXT
+        )
         if total:
-            self.progress_bar.set(max(0.0, min(1.0, done / total)))
-            self.progress_label.configure(
-                text=f"Загрузка: {done / 1048576:.1f} / {total / 1048576:.1f} МБ"
+            self.progress_bar.set(done / total)
+            self.progress_detail.configure(
+                text=f"{fmt.size(done)} / {fmt.size(total)}", text_color=theme.DIM
             )
         else:
-            self.progress_label.configure(text=f"Загрузка: {done / 1048576:.1f} МБ")
+            self.progress_bar.start()
+            self.progress_detail.configure(text=fmt.size(done), text_color=theme.DIM)
 
-    def show_result(self, text: str, *, ok: bool = True) -> None:
-        self._show_progress_widgets()
-        self.progress_bar.set(1.0 if ok else 0.0)
-        self.progress_bar.configure(
-            progress_color=theme.color("state.ok" if ok else "state.error")
+    def show_result(self, message: str, *, ok: bool = True) -> None:
+        self._busy = False
+        self._show_progress()
+        self.progress_bar.stop()
+        self.progress_bar.set_color(theme.OK if ok else theme.ERR)
+        self.progress_bar.set(1.0 if ok else 0.0, animate=False)
+        icon = "✓ " if ok else "× "
+        self.progress_title.configure(text=icon + message, text_color=theme.OK if ok else theme.ERR)
+        self.progress_detail.configure(
+            text="" if ok else "Ничего не установлено — можно повторить.", text_color=theme.DIM
         )
-        self.progress_label.configure(
-            text=text, text_color=theme.color("state.ok" if ok else "state.error")
-        )
-        self.download_button.configure(state="disabled" if ok else "normal", text="↓  Скачать")
-
-    def _show_progress_widgets(self) -> None:
-        if not self.progress_label.winfo_ismapped():
-            self.progress_label.grid(row=0, column=0, sticky="ew", pady=(0, theme.GAP["xs"]))
-            self.progress_bar.grid(row=1, column=0, sticky="ew", pady=(0, theme.GAP["md"]))
+        self.download_button.configure(text="Готово" if ok else "Повторить")
+        if ok:
+            self.download_button.configure(command=self.destroy)
+        self.download_button.set_enabled(True)
 
     def _download(self) -> None:
         target = self._installable()
         if target is None or self._on_download is None:
             return
-        self.download_button.configure(state="disabled", text="Загрузка…")
-        self._show_progress_widgets()
-        self.progress_label.configure(text="Загрузка…", text_color=theme.color("fg.secondary"))
-        self.progress_bar.configure(progress_color=theme.color("accent"))
-        self.progress_bar.set(0)
+        self._busy = True
+        self.download_button.configure(text="Скачиваю…")
+        self.download_button.set_enabled(False)
+        self._show_progress()
+        self.progress_bar.set_color(theme.AMBER)
+        self.progress_bar.reset()
+        self.progress_bar.start()
+        self.progress_title.configure(text="Подготовка загрузки…", text_color=theme.TXT)
+        self.progress_detail.configure(text="")
         self._on_download(target)
