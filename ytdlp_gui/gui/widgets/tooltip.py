@@ -1,27 +1,28 @@
-"""Всплывающая подсказка при наведении на параметр.
+"""Всплывающая подсказка при наведении (design-system §8.5).
 
-Показ подсказки проверяет настройку ``show_tooltips`` в момент наведения
-(не при создании виджета) — переключатель в настройках работает сразу,
-без перезапуска приложения.
+Фон ``BG2``, рамка ``LINE2``, задержка 0.5 с. Показ проверяет настройку
+``show_tooltips`` в момент наведения, поэтому переключатель в настройках
+действует сразу. Окно — обычный ``tk.Toplevel``: у CTkToplevel есть
+перерисовка заголовка, которая для подсказки даёт мерцание.
 """
 
 from __future__ import annotations
 
-import customtkinter as ctk
+import tkinter as tk
 
 from .. import theme
 
 
 class Tooltip:
-    """Простая всплывающая подсказка поверх произвольного виджета."""
+    """Подсказка поверх произвольного виджета."""
 
-    def __init__(self, widget, app, text: str, delay: int = 450) -> None:
+    def __init__(self, widget, app, text: str, delay: int = 500) -> None:
         self.widget = widget
         self.app = app
         self.text = text
         self.delay = delay
         self._after_id: str | None = None
-        self._window: ctk.CTkToplevel | None = None
+        self._window: tk.Toplevel | None = None
 
         widget.bind("<Enter>", self._schedule, add="+")
         widget.bind("<Leave>", self._hide, add="+")
@@ -29,47 +30,50 @@ class Tooltip:
 
     def _schedule(self, _event=None) -> None:
         self._cancel()
-        if not getattr(self.app.settings, "show_tooltips", True) or not self.text:
+        if self.app is not None and not getattr(self.app.settings, "show_tooltips", True):
             return
-        self._after_id = self.widget.after(self.delay, self._show)
+        if self.text:
+            self._after_id = self.widget.after(self.delay, self._show)
 
     def _cancel(self) -> None:
         if self._after_id is not None:
             try:
                 self.widget.after_cancel(self._after_id)
-            except Exception:  # noqa: BLE001
+            except tk.TclError:
                 pass
             self._after_id = None
 
     def _show(self) -> None:
+        self._after_id = None
         if self._window is not None:
             return
         try:
             x = self.widget.winfo_rootx() + 12
             y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
-        except Exception:  # noqa: BLE001 - виджет мог быть уже уничтожен
+        except tk.TclError:  # виджет уже уничтожен
             return
-
-        window = ctk.CTkToplevel(self.widget)
+        scale = theme.widget_scale(self.widget)
+        family = theme.sans(12).actual("family")
+        window = tk.Toplevel(self.widget)
         window.wm_overrideredirect(True)
-        window.wm_geometry(f"+{x}+{y}")
+        window.configure(bg=theme.LINE2)
         try:
             window.attributes("-topmost", True)
-        except Exception:  # noqa: BLE001
+        except tk.TclError:
             pass
-        ctk.CTkLabel(
+        tk.Label(
             window,
             text=self.text,
             justify="left",
             anchor="w",
-            fg_color=theme.color("bg.elevated"),
-            text_color=theme.color("fg.primary"),
-            corner_radius=theme.RADIUS["sm"],
-            font=theme.font("small"),
-            wraplength=320,
-            padx=10,
-            pady=6,
-        ).pack()
+            bg=theme.BG2,
+            fg=theme.TXT,
+            font=(family, -round(12 * scale)),
+            wraplength=round(340 * scale),
+            padx=round(10 * scale),
+            pady=round(6 * scale),
+        ).pack(padx=1, pady=1)
+        window.wm_geometry(f"+{x}+{y}")
         self._window = window
 
     def _hide(self, _event=None) -> None:
@@ -77,6 +81,6 @@ class Tooltip:
         if self._window is not None:
             try:
                 self._window.destroy()
-            except Exception:  # noqa: BLE001
+            except tk.TclError:
                 pass
             self._window = None

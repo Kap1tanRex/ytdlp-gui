@@ -1,341 +1,362 @@
-"""Дизайн-токены и оформление интерфейса.
+"""Визуальная система интерфейса — по образцу «Стемницы».
 
-Повторяет систему оформления ZapretGUI: палитра описывается набором
-токенов (``bg.*``, ``fg.*``, ``accent*``, ``state.*``, ``border*``), а
-экраны берут цвета только из них — ни один виджет не задаёт цвет
-«руками». В ZapretGUI из токенов собирается QSS для Qt; здесь из тех же
-значений собирается тема CustomTkinter (словарь
-``customtkinter.ThemeManager.theme``).
+Тёплая тёмная «приборная панель»: почти чёрный коричневый фон,
+волосяные линии, моноширинные капс-подписи с разрядкой и один янтарный
+акцент. Токены названы так же, как в ``docs/design-system.md``
+«Стемницы» (палитра — §3, шрифты — §4, метрики — §5), и экраны берут
+цвета и шрифты только отсюда.
 
-Каждый цвет — пара ``(светлая тема, тёмная тема)``: CustomTkinter сам
-выбирает нужный элемент пары по режиму оформления, поэтому переключение
-«Системная / Светлая / Тёмная» работает без пересоздания виджетов.
+Тема одна — тёмная: светлой у «Стемницы» нет, а контраст цветов (§3.7)
+посчитан под тёмный фон. Масштаб интерфейса делает CustomTkinter:
+``set_widget_scaling`` пересчитывает размеры и шрифты уже созданных
+виджетов, поэтому масштаб меняется без перезапуска.
 
-Масштаб интерфейса (в ZapretGUI — ``font_scale``, §13.1) реализован
-средствами CustomTkinter: ``set_widget_scaling`` пересчитывает размеры
-шрифтов, отступов и самих виджетов у всех уже созданных окон, поэтому
-ползунок в настройках действует сразу, без перезапуска.
+Правила янтаря (§3.8): основная кнопка (одна на экран), активная
+вкладка, выбранный сегмент, наведение и фокус, включённые флажки,
+тумблеры и светодиоды. Больше нигде.
 """
 
 from __future__ import annotations
 
+import ctypes
+import ctypes.wintypes
 import logging
+import sys
 import tkinter.font
+from pathlib import Path
 
 import customtkinter as ctk
 
 log = logging.getLogger(__name__)
 
-#: Границы масштаба интерфейса — как в ZapretGUI (80…160 %).
+# -- цвет (§3.1–3.2) ----------------------------------------------------------
+PIT = "#100D0B"  # «дно»: миниатюры, таблица форматов
+BG = "#141110"  # фон окна и страниц
+BG2 = "#1B1815"  # панели, карточки, строки списков, диалоги
+BG3 = "#221E1A"  # наведение, выбранный сегмент, текущая строка, желоба
+LINE = "#2A2521"  # волосяные линии и рамки панелей
+LINE2 = "#3B342D"  # рамки элементов управления
+TXT = "#E8E1D3"  # основной текст
+DIM = "#96897A"  # вторичный текст, заливка прогресса
+FAINT = "#655C50"  # подписи разделов, подсказки — только необязательное
+AMBER = "#E8A33D"  # акцент
+AMBER2 = "#F2B95A"  # основная кнопка при наведении
+AMBER_DEEP = "#C98A2C"  # основная кнопка при нажатии
+ON_AMBER = "#191410"  # текст на янтаре
+TOAST_BG = "#221D18"  # уведомления, подсказки
+OK = "#7FAE6F"
+WARN = "#D9B13D"
+ERR = "#C9604A"
+ERR_BG = "#2A1A17"
+
+#: Состояние -> цвет подписи. Ошибка всегда дублируется значком или
+#: кромкой и текстом — один цвет ничего не сообщает (§3.2).
+STATE_COLORS = {"ok": OK, "warn": WARN, "error": ERR, "info": DIM, "idle": FAINT}
+
+# -- метрики (§5) ------------------------------------------------------------
+MAX_WIDTH = 1440  # максимальная ширина содержимого
+PAGE_PAD = 28  # боковое поле страницы
+HEADER_HEIGHT = 58
+SETTINGS_WIDTH = 900  # колонка настроек
+
+#: Границы масштаба интерфейса.
 MIN_SCALE = 0.8
 MAX_SCALE = 1.6
 
-Palette = dict[str, str]
+# -- шрифты (§4.1) -------------------------------------------------------------
+FONTS_DIR = Path(__file__).resolve().parent.parent / "resources" / "fonts"
 
-#: Токены светлой темы (значения — из ZapretGUI ``themes/light.json``).
-LIGHT: Palette = {
-    "bg.window": "#F5F6F8",
-    "bg.surface": "#FFFFFF",
-    "bg.elevated": "#FFFFFF",
-    "bg.hover": "#EDEFF3",
-    "bg.selected": "#E3EBFB",
-    "fg.primary": "#1B1D21",
-    "fg.secondary": "#5F6368",
-    "fg.disabled": "#A0A4AB",
-    "fg.inverted": "#FFFFFF",
-    "accent": "#2F6FE4",
-    "accent.hover": "#3F7DF0",
-    "accent.pressed": "#2559BC",
-    "accent.fg": "#FFFFFF",
-    "state.ok": "#1A7F37",
-    "state.warn": "#9A6700",
-    "state.error": "#CF222E",
-    "state.info": "#0969DA",
-    "border": "#D8DCE3",
-    "border.strong": "#BFC5CF",
-    # Заливка выпадающих списков: CustomTkinter не умеет рисовать им рамку,
-    # поэтому в светлой теме поле должно отличаться от поверхности карточки.
-    "bg.field": "#ECEFF4",
-    "bg.field.button": "#DEE3EB",
+#: Роль -> (семейство, файл). Начертания IBM Plex и Unbounded в Windows —
+#: отдельные семейства («IBM Plex Sans Medium»), а не веса одного.
+_FACES = {
+    "sans": ("IBM Plex Sans", "IBMPlexSans-Regular.ttf"),
+    "sans_medium": ("IBM Plex Sans Medium", "IBMPlexSans-Medium.ttf"),
+    "sans_semi": ("IBM Plex Sans SemiBold", "IBMPlexSans-SemiBold.ttf"),
+    "mono": ("IBM Plex Mono", "IBMPlexMono-Regular.ttf"),
+    "mono_medium": ("IBM Plex Mono Medium", "IBMPlexMono-Medium.ttf"),
+    "display": ("Unbounded Medium", "Unbounded-Medium.ttf"),
+    "display_semi": ("Unbounded SemiBold", "Unbounded-SemiBold.ttf"),
 }
 
-#: Токены тёмной темы (значения — из ZapretGUI ``themes/dark.json``).
-DARK: Palette = {
-    "bg.window": "#14161A",
-    "bg.surface": "#1C1F25",
-    "bg.elevated": "#242830",
-    "bg.hover": "#2A2F38",
-    "bg.selected": "#2F3742",
-    "fg.primary": "#E8EAED",
-    "fg.secondary": "#9AA0A6",
-    "fg.disabled": "#5F6368",
-    "fg.inverted": "#14161A",
-    "accent": "#4C8DFF",
-    "accent.hover": "#679DFF",
-    "accent.pressed": "#3A78E0",
-    "accent.fg": "#FFFFFF",
-    "state.ok": "#3FB950",
-    "state.warn": "#D29922",
-    "state.error": "#F85149",
-    "state.info": "#58A6FF",
-    "border": "#2C313A",
-    "border.strong": "#3A414D",
-    "bg.field": "#242830",
-    "bg.field.button": "#2F3742",
+#: Замена, если встроенный шрифт не загрузился: (семейство, вес).
+_FALLBACKS = {
+    "sans": ("Segoe UI", "normal"),
+    "sans_medium": ("Segoe UI Semibold", "normal"),
+    "sans_semi": ("Segoe UI", "bold"),
+    "mono": ("Consolas", "normal"),
+    "mono_medium": ("Consolas", "bold"),
+    "display": ("Segoe UI Semibold", "normal"),
+    "display_semi": ("Segoe UI", "bold"),
 }
 
-#: Радиусы скруглений (токены ``radius.sm|md|lg`` ZapretGUI).
-RADIUS = {"sm": 7, "md": 10, "lg": 14}
-
-#: Базовые размеры шрифта. Масштаб интерфейса применяется поверх них
-#: средствами CustomTkinter, поэтому здесь значения всегда «стопроцентные».
-FONT_SIZE = {
-    "small": 12,
-    "base": 13,
-    "large": 15,
-    "title": 17,
-    "hero": 26,
-}
-
-#: Отступы, из которых собраны все экраны (аналог полей Card/Page в ZapretGUI).
-GAP = {"xs": 4, "sm": 8, "md": 12, "lg": 16, "xl": 20}
-
-#: Ширина боковой панели навигации.
-SIDEBAR_WIDTH = 236
-
-_FAMILY_CANDIDATES = ("Segoe UI Variable Text", "Segoe UI", "Inter", "Noto Sans", "DejaVu Sans")
-_MONO_CANDIDATES = ("Cascadia Mono", "Consolas", "DejaVu Sans Mono", "Menlo", "Courier New")
-
-_family = "Segoe UI"
-_mono_family = "Consolas"
+_resolved: dict[str, tuple[str, str]] = dict(_FALLBACKS)
+_font_cache: dict[tuple[str, int], ctk.CTkFont] = {}
 
 
-# -- доступ к токенам ---------------------------------------------------------
-def color(token: str, fallback: str = "#808080") -> tuple[str, str]:
-    """Пара цветов ``(светлая, тёмная)`` для токена — в формате CustomTkinter."""
-    return (LIGHT.get(token, fallback), DARK.get(token, fallback))
+def install_fonts(root) -> None:
+    """Подключает встроенные шрифты. Нужен уже созданный корень Tk.
 
-
-def mix(token: str, background: str, ratio: float = 0.2) -> tuple[str, str]:
-    """Цвет ``token``, разбавленный фоном ``background``.
-
-    CustomTkinter не умеет полупрозрачные заливки, поэтому «акцент с
-    прозрачностью 20 %» приходится считать заранее — например, для круглой
-    подложки под значком.
+    Файлы регистрируются только для этого процесса (в системе ничего не
+    устанавливается). Если какое-то начертание не подхватилось, роль
+    получает системную замену, а не падает.
     """
-    return tuple(  # type: ignore[return-value]
-        _blend(palette.get(token, "#808080"), palette.get(background, "#808080"), ratio)
-        for palette in (LIGHT, DARK)
+    for role, (family, filename) in _FACES.items():
+        path = FONTS_DIR / filename
+        loaded = False
+        if path.is_file():
+            try:
+                loaded = bool(ctk.FontManager.load_font(str(path)))
+            except Exception:  # noqa: BLE001 - без шрифта интерфейс всё равно должен открыться
+                log.debug("Шрифт %s не загружен", path, exc_info=True)
+        if loaded and _family_available(root, family):
+            _resolved[role] = (family, "normal")
+        else:
+            log.info("Шрифт «%s» недоступен, используется замена", family)
+            _resolved[role] = _FALLBACKS[role]
+    _font_cache.clear()
+    ctk.ThemeManager.theme["CTkFont"]["family"] = _resolved["sans"][0]
+
+
+def _family_available(root, family: str) -> bool:
+    # Шрифты загружены как «неперечисляемые» и в families() не видны,
+    # поэтому проверяем, во что Tk на самом деле превратил запрос.
+    try:
+        actual = tkinter.font.Font(root, family=family, size=-12).actual("family")
+    except Exception:  # noqa: BLE001
+        return False
+    return str(actual).lower() == family.lower()
+
+
+def family(role: str) -> str:
+    """Семейство, которым на деле рисуется роль (встроенное или замена)."""
+    return _resolved.get(role, _FALLBACKS["sans"])[0]
+
+
+def font(role: str, size: int) -> ctk.CTkFont:
+    """Шрифт роли ``role`` (см. :data:`_FACES`) кеглем ``size`` пикселей."""
+    key = (role, int(size))
+    cached = _font_cache.get(key)
+    if cached is None:
+        family, weight = _resolved.get(role, _FALLBACKS["sans"])
+        cached = ctk.CTkFont(family=family, size=int(size), weight=weight)
+        _font_cache[key] = cached
+    return cached
+
+
+def sans(size: int = 13) -> ctk.CTkFont:
+    return font("sans", size)
+
+
+def sans_medium(size: int = 14) -> ctk.CTkFont:
+    return font("sans_medium", size)
+
+
+def mono(size: int = 12) -> ctk.CTkFont:
+    return font("mono", size)
+
+
+def mono_medium(size: int = 12) -> ctk.CTkFont:
+    return font("mono_medium", size)
+
+
+def display(size: int = 30) -> ctk.CTkFont:
+    return font("display", size)
+
+
+def display_semi(size: int = 16) -> ctk.CTkFont:
+    return font("display_semi", size)
+
+
+# -- набор (§4.3) ------------------------------------------------------------
+HAIR_SPACE = "\u200a"
+THIN_SPACE = "\u2009"
+
+
+def caps(text: str, tracking: float = 0.12) -> str:
+    """Служебная подпись: капс с разрядкой.
+
+    Tk не умеет межбуквенный интервал, поэтому разрядка набирается
+    пробелами: волосяной (≈1 px при 11–12 px) для 0.08–0.13 em и тонкий
+    (≈2 px) для 0.14 em и больше. Ниже 0.08 em разрядки нет.
+    """
+    text = text.upper()
+    if tracking < 0.08 or not text:
+        return text
+    return (THIN_SPACE if tracking >= 0.14 else HAIR_SPACE).join(text)
+
+
+def mix(a: str, b: str, t: float) -> str:
+    """Смесь цветов: ``t = 0`` — ``a``, ``t = 1`` — ``b``.
+
+    CustomTkinter не умеет полупрозрачные заливки, поэтому «цвет с
+    альфой 0.45 на фоне» считается заранее этой функцией.
+    """
+    t = max(0.0, min(1.0, t))
+    ra, ga, ba = _rgb(a)
+    rb, gb, bb = _rgb(b)
+    return "#{:02X}{:02X}{:02X}".format(
+        round(ra + (rb - ra) * t), round(ga + (gb - ga) * t), round(ba + (bb - ba) * t)
     )
 
 
-def _blend(foreground: str, background: str, ratio: float) -> str:
-    ratio = max(0.0, min(1.0, ratio))
-    front = _rgb(foreground)
-    back = _rgb(background)
-    return "#" + "".join(
-        f"{round(f * ratio + b * (1 - ratio)):02X}" for f, b in zip(front, back, strict=False)
-    )
-
-
-def _rgb(color: str) -> tuple[int, int, int]:
-    value = color.lstrip("#")
+def _rgb(value: str) -> tuple[int, int, int]:
+    value = value.lstrip("#")
     if len(value) == 3:
         value = "".join(char * 2 for char in value)
     try:
-        return (int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16))
+        return int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16)
     except ValueError:
-        return (128, 128, 128)
+        return 128, 128, 128
 
 
-def font(size: str = "base", *, weight: str = "normal", mono: bool = False) -> ctk.CTkFont:
-    """Шрифт по имени размера из :data:`FONT_SIZE`."""
-    return ctk.CTkFont(
-        family=_mono_family if mono else _family,
-        size=FONT_SIZE.get(size, FONT_SIZE["base"]),
-        weight=weight,
-    )
-
-
-# -- сборка темы CustomTkinter ------------------------------------------------
+# -- тема CustomTkinter ------------------------------------------------------
 def build_theme() -> dict:
-    """Тема CustomTkinter, собранная из токенов.
+    """Значения по умолчанию для виджетов CustomTkinter.
 
-    Значения по умолчанию описывают «вторичный» вид элементов (как
-    ``QPushButton`` без objectName в ZapretGUI); акцентный, опасный и
-    ссылочный варианты задаются фабриками в
-    :mod:`ytdlp_gui.gui.widgets.design`.
+    Здесь только нейтральная основа; конкретный вид кнопок, сегментов,
+    полей и прочего задают компоненты :mod:`ytdlp_gui.gui.widgets.design`.
     """
     return {
-        "CTk": {"fg_color": color("bg.window")},
-        "CTkToplevel": {"fg_color": color("bg.window")},
+        "CTk": {"fg_color": BG},
+        "CTkToplevel": {"fg_color": BG2},
         "CTkFrame": {
-            "corner_radius": RADIUS["md"],
+            "corner_radius": 0,
             "border_width": 0,
-            "fg_color": color("bg.surface"),
-            "top_fg_color": color("bg.elevated"),
-            "border_color": color("border"),
+            "fg_color": BG,
+            "top_fg_color": BG2,
+            "border_color": LINE,
         },
         "CTkButton": {
-            "corner_radius": RADIUS["sm"],
+            "corner_radius": 3,
             "border_width": 1,
-            "fg_color": color("bg.elevated"),
-            "hover_color": color("bg.hover"),
-            "border_color": color("border.strong"),
-            "text_color": color("fg.primary"),
-            "text_color_disabled": color("fg.disabled"),
+            "fg_color": "transparent",
+            "hover_color": BG3,
+            "border_color": LINE2,
+            "text_color": TXT,
+            "text_color_disabled": FAINT,
         },
         "CTkLabel": {
             "corner_radius": 0,
             "border_width": 0,
             "fg_color": "transparent",
-            "border_color": color("border"),
-            "text_color": color("fg.primary"),
+            "border_color": LINE,
+            "text_color": TXT,
         },
         "CTkEntry": {
-            "corner_radius": RADIUS["sm"],
+            "corner_radius": 3,
             "border_width": 1,
-            "fg_color": color("bg.elevated"),
-            "border_color": color("border.strong"),
-            "text_color": color("fg.primary"),
-            "placeholder_text_color": color("fg.disabled"),
+            "fg_color": BG,
+            "border_color": LINE2,
+            "text_color": TXT,
+            "placeholder_text_color": FAINT,
         },
         "CTkCheckBox": {
-            "corner_radius": 4,
-            "border_width": 2,
-            "fg_color": color("accent"),
-            "border_color": color("border.strong"),
-            "hover_color": color("accent.hover"),
-            "checkmark_color": color("accent.fg"),
-            "text_color": color("fg.primary"),
-            "text_color_disabled": color("fg.disabled"),
+            "corner_radius": 2,
+            "border_width": 1,
+            "fg_color": AMBER,
+            "border_color": LINE2,
+            "hover_color": AMBER2,
+            "checkmark_color": ON_AMBER,
+            "text_color": TXT,
+            "text_color_disabled": FAINT,
         },
         "CTkSwitch": {
-            "corner_radius": 1000,
-            "border_width": 3,
+            "corner_radius": 10,
+            "border_width": 2,
             "button_length": 0,
-            "fg_color": color("border.strong"),
-            "progress_color": color("accent"),
-            "button_color": color("bg.surface"),
-            "button_hover_color": color("bg.hover"),
-            "text_color": color("fg.primary"),
-            "text_color_disabled": color("fg.disabled"),
+            "fg_color": LINE2,
+            "progress_color": AMBER,
+            "button_color": TXT,
+            "button_hover_color": TXT,
+            "text_color": TXT,
+            "text_color_disabled": FAINT,
         },
         "CTkRadioButton": {
             "corner_radius": 1000,
-            "border_width_checked": 5,
-            "border_width_unchecked": 2,
-            "fg_color": color("accent"),
-            "border_color": color("border.strong"),
-            "hover_color": color("accent.hover"),
-            "text_color": color("fg.primary"),
-            "text_color_disabled": color("fg.disabled"),
+            "border_width_checked": 4,
+            "border_width_unchecked": 1,
+            "fg_color": AMBER,
+            "border_color": LINE2,
+            "hover_color": AMBER2,
+            "text_color": TXT,
+            "text_color_disabled": FAINT,
         },
         "CTkProgressBar": {
-            "corner_radius": 1000,
+            "corner_radius": 0,
             "border_width": 0,
-            "fg_color": color("bg.hover"),
-            "progress_color": color("accent"),
-            "border_color": color("border"),
+            "fg_color": BG3,
+            "progress_color": DIM,
+            "border_color": LINE,
         },
         "CTkSlider": {
-            "corner_radius": 1000,
-            "button_corner_radius": 1000,
+            "corner_radius": 2,
+            "button_corner_radius": 2,
             "border_width": 6,
             "button_length": 0,
-            "fg_color": color("border.strong"),
-            "progress_color": color("accent"),
-            "button_color": color("accent"),
-            "button_hover_color": color("accent.hover"),
+            "fg_color": LINE2,
+            "progress_color": DIM,
+            "button_color": DIM,
+            "button_hover_color": AMBER,
         },
         "CTkOptionMenu": {
-            "corner_radius": RADIUS["sm"],
-            "fg_color": color("bg.field"),
-            "button_color": color("bg.field.button"),
-            "button_hover_color": color("accent"),
-            "text_color": color("fg.primary"),
-            "text_color_disabled": color("fg.disabled"),
+            "corner_radius": 2,
+            "fg_color": BG,
+            "button_color": BG,
+            "button_hover_color": BG,
+            "text_color": TXT,
+            "text_color_disabled": FAINT,
         },
         "CTkComboBox": {
-            "corner_radius": RADIUS["sm"],
+            "corner_radius": 3,
             "border_width": 1,
-            "fg_color": color("bg.field"),
-            "border_color": color("border.strong"),
-            "button_color": color("bg.field.button"),
-            "button_hover_color": color("accent"),
-            "text_color": color("fg.primary"),
-            "text_color_disabled": color("fg.disabled"),
+            "fg_color": BG,
+            "border_color": LINE2,
+            "button_color": LINE2,
+            "button_hover_color": AMBER,
+            "text_color": TXT,
+            "text_color_disabled": FAINT,
         },
         "CTkScrollbar": {
-            "corner_radius": 1000,
-            "border_spacing": 4,
+            "corner_radius": 3,
+            "border_spacing": 2,
             "fg_color": "transparent",
-            "button_color": color("border.strong"),
-            "button_hover_color": color("fg.disabled"),
+            "button_color": LINE2,
+            "button_hover_color": DIM,
         },
         "CTkSegmentedButton": {
-            "corner_radius": RADIUS["sm"],
-            "border_width": 2,
-            "fg_color": color("bg.elevated"),
-            "selected_color": color("accent"),
-            "selected_hover_color": color("accent.hover"),
-            "unselected_color": color("bg.elevated"),
-            "unselected_hover_color": color("bg.hover"),
-            "text_color": color("fg.primary"),
-            "text_color_disabled": color("fg.disabled"),
+            "corner_radius": 3,
+            "border_width": 1,
+            "fg_color": LINE2,
+            "selected_color": BG3,
+            "selected_hover_color": BG3,
+            "unselected_color": BG,
+            "unselected_hover_color": BG3,
+            "text_color": TXT,
+            "text_color_disabled": FAINT,
         },
         "CTkTextbox": {
-            "corner_radius": RADIUS["sm"],
-            "border_width": 1,
-            "fg_color": color("bg.elevated"),
-            "border_color": color("border.strong"),
-            "text_color": color("fg.primary"),
-            "scrollbar_button_color": color("border.strong"),
-            "scrollbar_button_hover_color": color("fg.disabled"),
+            "corner_radius": 3,
+            "border_width": 0,
+            "fg_color": PIT,
+            "border_color": LINE,
+            "text_color": DIM,
+            "scrollbar_button_color": LINE2,
+            "scrollbar_button_hover_color": DIM,
         },
-        "CTkScrollableFrame": {"label_fg_color": color("bg.elevated")},
-        "DropdownMenu": {
-            "fg_color": color("bg.elevated"),
-            "hover_color": color("bg.selected"),
-            "text_color": color("fg.primary"),
-        },
-        "CTkFont": {"family": _family, "size": FONT_SIZE["base"], "weight": "normal"},
+        "CTkScrollableFrame": {"label_fg_color": BG2},
+        "DropdownMenu": {"fg_color": BG2, "hover_color": BG3, "text_color": TXT},
+        "CTkFont": {"family": _resolved["sans"][0], "size": 13, "weight": "normal"},
     }
 
 
 def install() -> None:
     """Делает тему активной. Вызывается до создания виджетов."""
     ctk.ThemeManager.theme = build_theme()
-    ctk.ThemeManager._currently_loaded_theme = "ytdlp-gui"
+    ctk.ThemeManager._currently_loaded_theme = "stemnica"
+    ctk.set_appearance_mode("Dark")
 
 
-def resolve_fonts(root) -> None:
-    """Подбирает первое доступное семейство шрифтов из списка кандидатов.
-
-    Список семейств доступен только при уже созданном корневом окне Tk,
-    поэтому вызывается сразу после создания окна и до построения экранов.
-    """
-    global _family, _mono_family
-    try:
-        available = {name.lower() for name in tkinter.font.families(root)}
-    except Exception:  # noqa: BLE001 - без списка семейств остаёмся на значениях по умолчанию
-        log.debug("Список семейств шрифтов недоступен")
-        return
-    for candidate in _FAMILY_CANDIDATES:
-        if candidate.lower() in available:
-            _family = candidate
-            break
-    for candidate in _MONO_CANDIDATES:
-        if candidate.lower() in available:
-            _mono_family = candidate
-            break
-    try:
-        ctk.ThemeManager.theme["CTkFont"]["family"] = _family
-    except (KeyError, TypeError):  # pragma: no cover - тема всегда установлена install()
-        pass
-
-
-# -- режим оформления и масштаб ----------------------------------------------
+# -- масштаб -----------------------------------------------------------------
 def normalize_scale(value: float | int | str) -> float:
     """Приводит масштаб к допустимому диапазону; мусор заменяет на 1.0."""
     try:
@@ -354,18 +375,62 @@ def scale_percent(scale: float) -> int:
     return int(round(normalize_scale(scale) * 100))
 
 
-def apply_appearance(mode: str) -> None:
-    """``System`` | ``Light`` | ``Dark`` — значения из настроек приложения."""
-    ctk.set_appearance_mode(mode if mode in ("System", "Light", "Dark") else "System")
-
-
 def apply_scale(scale: float) -> float:
-    """Применяет масштаб интерфейса ко всем окнам приложения.
-
-    Возвращает фактически применённое значение (после ограничения
-    диапазоном), чтобы вызывающий код мог сохранить именно его.
-    """
+    """Применяет масштаб ко всем окнам и возвращает фактическое значение."""
     value = normalize_scale(scale)
     ctk.set_widget_scaling(value)
     ctk.set_window_scaling(value)
     return value
+
+
+def widget_scale(widget) -> float:
+    """Итоговый множитель (DPI × масштаб) для рисования «сырыми» пикселями."""
+    try:
+        return ctk.ScalingTracker.get_widget_scaling(widget)
+    except Exception:  # noqa: BLE001 - виджет вне отслеживаемого окна
+        return 1.0
+
+
+# -- оболочка Windows (§14.1) -------------------------------------------------
+APP_ICON = Path(__file__).resolve().parent.parent / "resources" / "app.ico"
+
+_DWMWA_BORDER_COLOR = 34
+_DWMWA_CAPTION_COLOR = 35
+_DWMWA_TEXT_COLOR = 36
+
+
+def style_window(window) -> None:
+    """Значок и цвета заголовка окна (Windows 11) под фон приложения.
+
+    CustomTkinter сам включает тёмный заголовок; здесь ему задаётся
+    точный цвет фона, рамки и текста. На Windows 10 эти атрибуты не
+    поддерживаются, и вызов тихо ничего не меняет.
+    """
+    if APP_ICON.is_file():
+        try:
+            window.iconbitmap(str(APP_ICON))
+        except Exception:  # noqa: BLE001 - значок — не повод не открыть окно
+            log.debug("Значок окна не установлен", exc_info=True)
+    if sys.platform != "win32":
+        return
+    # Рамка окна появляется не сразу: CustomTkinter ещё прячет и снова
+    # показывает окно, перекрашивая заголовок в тёмный.
+    window.after(120, lambda: _paint_titlebar(window))
+
+
+def _paint_titlebar(window) -> None:
+    try:
+        window.update_idletasks()
+        hwnd = ctypes.wintypes.HWND(int(window.wm_frame(), 16))
+        for attribute, value in (
+            (_DWMWA_CAPTION_COLOR, BG),
+            (_DWMWA_BORDER_COLOR, LINE),
+            (_DWMWA_TEXT_COLOR, TXT),
+        ):
+            red, green, blue = _rgb(value)
+            colorref = ctypes.c_int(red | (green << 8) | (blue << 16))
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, attribute, ctypes.byref(colorref), ctypes.sizeof(colorref)
+            )
+    except Exception:  # noqa: BLE001 - окно могли закрыть; DWM может быть недоступен
+        log.debug("Цвет заголовка окна не задан", exc_info=True)

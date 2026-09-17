@@ -22,7 +22,9 @@ from PyInstaller.utils.hooks import collect_all
 
 PROJECT_DIR = Path(SPECPATH)
 
+# Ресурсы: переводы, шрифты интерфейса (IBM Plex, Unbounded) и значок.
 datas = [('ytdlp_gui/resources', 'ytdlp_gui/resources')]
+APP_ICON = PROJECT_DIR / 'ytdlp_gui' / 'resources' / 'app.ico'
 binaries = []
 hiddenimports = ['PIL._tkinter_finder']
 
@@ -97,4 +99,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=str(APP_ICON) if APP_ICON.is_file() else None,
 )
